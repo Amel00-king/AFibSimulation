@@ -6,6 +6,7 @@ import csv
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import pandas as pd 
+from google.colab import files
 
 
 
@@ -56,19 +57,23 @@ def plot_electrodes(electrodes):
     return 
 
 
-''' only returns 100 values per electrode. It needs to calculate across x,y dimensionss not just one or other'''
+''' only returns 100 values per electrode --> attempted fix done'''
 def calc_distances(electrodes, L_x, L_y, dx, dy):
-    distances = {}
+    
+    distances = {label: np.zeros((L_y, L_x)) for label in electrode_positions.keys()}
     
     #calculate distance from each electrode to every element on the 2D 100x100 simulation grid
     for label, pos in electrodes.items():
         x, y, z = pos
-        distance = np.sqrt((np.arange(L_x) - x)**2 + (np.arange(L_y) - y)**2 + (0 - z)**2)
-        distances[label] = distance
+        for i in range(L_x):
+            for j in range(L_y):
+
+                distances[label][i,j] = np.sqrt((i - x)**2 + (j - y)**2 + (0 - z)**2)
 
     
     #returns a dictionary of keys with electrode names, and values as arrays of scalar float distances to grid
     return distances
+
 
 def simulate(time_run, reset_time, reset_height, electrodes=None):
     u = np.zeros((L_x,L_y))
@@ -90,32 +95,56 @@ def simulate(time_run, reset_time, reset_height, electrodes=None):
     for t in range(time_run):
 
         if t == reset_time:
-        print(f"creating rotor at: {t}")
-        u[reset_height:, :] = 0
-        u_history = [u]
+            print(f"creating rotor at: {t}")
+            u[reset_height:, :] = 0
+            u_history = [u]
 
+        for i in range(L_x - 1):
+            for j in range(L_y -1):
+            
+                #find central difference for each element
+                CD_x = (u[i + 1, j] - 2 * u[i, j] + u[i - 1, j]) / dx**2
+                CD_y = (u[i, j + 1] - 2 * u[i, j] + u[i, j - 1]) / dy**2
 
-        # Iterate through electrodes
-        for label, distance in distances.items():
-            x, y, z = electrodes[label]
-            # Calculate integrand (replace the following lines with your actual calculations)
-            sec_part_ux = np.random.rand(L_x, L_y)
-            sec_part_uy = np.random.rand(L_x, L_y)
-            integrand = (D * (sec_part_ux + sec_part_uy)) / distance
+                #update equations 
+                f = -k * u[i,j] * (u[i,j] - uth) * (u[i,j] - 1)
+                n[i,j] = n[i,j] + dt * (eps * (g * u[i,j] - n[i,j]))
+                u_next[i,j] = u[i,j] + dt * (D * (CD_x + CD_y) + f - n[i,j])
 
-            # Trapezoidal rule integration
-            integrated_signal = np.trapz(integrand)
+                # boundary conditions
+                u_next[0,:] = u_next[1,:]
+                u_next[L_x-1,:] = u_next[L_x-2,:]
+                u_next[:,0] = u_next[:,1]
+                u_next[:,L_x-1] = u_next[:,L_x-2]
 
-            # Save the integrated signal for the current timestep
-            electrode_data[label].append(integrated_signal)
+                
+                #itterate through electrodes
+                for label, distance in electrode_distances.items():
+                    x, y, z = electrodes[label]
+                    
+                    #calculate integrand 
+                    integrand = (D * (CD_x + CD_y)) / distance
 
-        # Your other simulation logic here...
+                    # Trapezoidal rule integration
+                    integrated_signal = np.trapz(integrand)
 
-    # Convert electrode data to a DataFrame
+                    # Save the integrated signal for the current timestep
+                    electrode_data[label].append(integrated_signal)
+        
+        
+        if t%100 == 0:
+            #save frames of u to u_history to later create gif of simulation
+            u_history.append(np.copy(u))
+    #
+    u = np.copy(u_next)
+        
+    #convert electrode data to a DataFrame
     df = pd.DataFrame(electrode_data)
+    df.to_csv('test.csv', encoding = 'utf-8-sig') 
+    files.download('output.csv')
 
     # Plot electrode positions
-    plot_electrode_positions(electrodes)
+    plot_electrodes(electrodes)
 
     return u_history, df
 
@@ -132,3 +161,52 @@ def simulate_all(electrode_pos, reset_times, reset_heights):
     return  
 
 
+# Create a function to update the plot at each frame
+def update(frame):
+    plt.clf()  # Clear the previous frame
+    plt.imshow(u_history[frame], cmap='viridis')
+    plt.title(f'Frame {frame}')
+
+
+def visualize(u_history, electrode_df):
+    # Create the figure and initial plot
+    fig, ax = plt.subplots()
+    im = ax.imshow(u_history[0], cmap='viridis')
+    plt.title('Frame 0')
+
+    # Create the animation
+    num_frames = len(u_history)
+    ani = FuncAnimation(fig, update, frames=num_frames, repeat=False)
+
+    # Save the animation as a GIF
+    ani.save('rotor.gif', writer='pillow', fps=8)  # Adjust fps as needed
+
+
+
+    #plot all electrodes on same fig
+    plt.figure()
+    for label in df.columns:
+        plt.plot(df.index, df[label], label=label)
+
+    plt.xlabel("Time Step")
+    plt.ylabel("Integrated Signal")
+    plt.title("ECG Signals Over Time - All Electrodes")
+    plt.legend()
+    plt.show()
+
+
+''' #check if the calc_distances is working for dictionaries
+dist = calc_distances(electrode_positions,L_x,L_y,dx,dy)
+# Assuming distances is the dictionary returned by calc_distances
+for label, distance_array in dist.items():
+    num_values = distance_array.size
+    print(f"The number of values for label {label} is: {num_values}")
+    num_rows, num_columns = distance_array.shape
+    print(f"For label {label}, the array has {num_rows} rows and {num_columns} columns.")
+
+'''
+
+
+
+u_history, df = simulate(1050, reset_times[0], reset_heights[0],electrode_positions)
+visualize(u_history,df) 
